@@ -74,8 +74,7 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
         node.update_access()
 
         if "ip" in args:
-            logger.info("They try to SECURE me: %s", unpack_host(args["ip"]))
-
+            logger.debug("They try to SECURE me: %s", unpack_host(args["ip"]))
 
         t_name = trans["name"]
         if t_name == "find_node":
@@ -124,6 +123,7 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
         if not node:
             node = Node(client_host, client_port, node_id)
             logger.debug("We don`t know about %r, add it as new" % (node))
+            self.server.dht.rt.update_node(node_id, node)
         else:
             logger.debug("We already know about: %r" % (node))
 
@@ -167,6 +167,10 @@ class DHT(object):
         self.server_thread.daemon = True
         self.server_thread.start()
 
+        self.gc_thread = threading.Thread(target=self.gc)
+        self.gc_thread.daemon = True
+        self.gc_thread.start()
+
         self.bootstrap(unicode(boot_host), boot_port)
     
     def iterative_find_nodes(self, find_iteration_timeout, sample_count):
@@ -176,11 +180,7 @@ class DHT(object):
         while True:
             nodes = self.rt.sample(sample_count)
             for node_id, node in nodes:
-                if len(node.trans) > 2:
-                    logger.debug("Node didn`t responded on > 2 requests, remove it: %r" % (node))
-                    self.rt.remove_node(node_id)
-                    continue
-                node.find_node(self.node._id, socket=self.server.socket, sender_id=self.node._id)
+                node.find_node(random_node_id(), socket=self.server.socket, sender_id=self.node._id)
                 #node.get_peers("3253ccc93c6b1a6c5f39c898ecfb2a47f33c3421".decode("hex"), socket=self.server.socket, sender_id=self.node._id)
 
             logger.info("Current known nodes count: %d" % (self.rt.count()))
@@ -209,3 +209,21 @@ class DHT(object):
         
         self.iterative_find_nodes(find_iteration_timeout, sample_count)
 
+    def gc(self):
+
+        logger.debug("Garbage collector started")
+        while self.rt.count() <= 8:
+            time.sleep(1)
+            
+        while True:
+            nodes = self.rt.sample(int(self.rt.count() / 3))
+            for node_id, node in nodes:
+                time_diff = time.time() - node.access_time
+                if time_diff > 60:
+                    if len(node.trans) > 5:
+                        logger.info("We have node with last access time difference: %d sec and %d pending transactions, remove it: %r" % (time_diff, len(node.trans), node))
+                        self.rt.remove_node(node_id)
+                        continue
+                    node.ping(socket=self.server.socket, sender_id=self.node._id)
+
+            time.sleep(1)

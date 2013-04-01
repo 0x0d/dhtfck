@@ -19,8 +19,7 @@ class Node(object):
 
         self.lock = threading.Lock()
 
-        self.access_time = None
-        self.update_access()
+        self.access_time = time.time()
 
     def __repr__(self):
         return repr("%s %s:%d" % (self._id.encode('hex'), self.host, self.port))
@@ -43,7 +42,7 @@ class Node(object):
     def update_access(self, unixtime=None):
         """ Update last access/modify time of this node """
         with self.lock:
-            if time:
+            if unixtime:
                 self.access_time = unixtime
             else:
                 self.access_time = time.time()
