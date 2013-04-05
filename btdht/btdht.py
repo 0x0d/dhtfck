@@ -13,9 +13,6 @@ from .utils import decode_nodes, encode_nodes, random_node_id, unpack_host, unpa
 
 logger = logging.getLogger(__name__)
 
-def hexiptostring(data, start):
-    return str(int(data[start:start+1].encode('hex'),16)) + "." + str(int(data[start+1:start+2].encode('hex'),16)) + "." + str(int(data[start+2:start+3].encode('hex'),16)) + "." +    str(int(data[start+3:start+4].encode('hex'),16))
-
 class DHTRequestHandler(SocketServer.BaseRequestHandler):
 
     def handle(self):
@@ -99,7 +96,7 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             logger.debug("ping response for: %r" % (node))
         elif t_name == "get_peers":
             node.update_access()
-            logger.debug("get peers response for: %r" % (node))
+            logger.debug("get_peers response for: %r" % (node))
             if "values" in args:
                 values = args["values"]
                 logger.info("got values")
