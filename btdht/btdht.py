@@ -71,19 +71,19 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
                 logger.debug(trans.encode("hex"))
             return
 
-        node.update_access()
-
         if "ip" in args:
             logger.debug("They try to SECURE me: %s", unpack_host(args["ip"]))
 
         t_name = trans["name"]
         if t_name == "find_node":
+            node.update_access()
             logger.debug("find_node response from %r" % (node))
-            new_nodes = decode_nodes(args["nodes"])
-            logger.debug("We got new nodes from %r" % (node))
-            for new_node_id, new_node_host, new_node_port in new_nodes:
-                logger.debug("Adding %r %s:%d as new node" % (new_node_id.encode("hex"), new_node_host, new_node_port))
-                self.server.dht.rt.update_node(new_node_id, Node(new_node_host, new_node_port, new_node_id))
+            if "nodes" in args:
+                new_nodes = decode_nodes(args["nodes"])
+                logger.debug("We got new nodes from %r" % (node))
+                for new_node_id, new_node_host, new_node_port in new_nodes:
+                    logger.debug("Adding %r %s:%d as new node" % (new_node_id.encode("hex"), new_node_host, new_node_port))
+                    self.server.dht.rt.update_node(new_node_id, Node(new_node_host, new_node_port, new_node_id))
 
             # cleanup boot node
             if node._id == "boot":
@@ -95,8 +95,10 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
                 # Remove old boot node
                 self.server.dht.rt.remove_node(node._id)
         elif t_name == "ping":
+            node.update_access()
             logger.debug("ping response for: %r" % (node))
         elif t_name == "get_peers":
+            node.update_access()
             logger.debug("get peers response for: %r" % (node))
             if "values" in args:
                 values = args["values"]
@@ -105,9 +107,11 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
                     logger.info(unpack_hostport(addr))
                     logger.info(addr.encode("hex"))
             if "nodes" in args:
-                logger.info("got nodes")
-                nodes = args["nodes"]
-                #logger.info(nodes)
+                new_nodes = decode_nodes(args["nodes"])
+                logger.debug("We got new nodes from %r" % (node))
+                for new_node_id, new_node_host, new_node_port in new_nodes:
+                    logger.debug("Adding %r %s:%d as new node" % (new_node_id.encode("hex"), new_node_host, new_node_port))
+                    self.server.dht.rt_peers.update_node(new_node_id, Node(new_node_host, new_node_port, new_node_id))
 
     def handle_query(self, message):
         trans_id = message["t"]
@@ -139,9 +143,11 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             node.found_node(found_nodes, socket=self.server.socket, trans_id = trans_id, sender_id=self.server.dht.node._id, lock=self.server.send_lock)
         elif query_type == "get_peers":
             logger.debug("handle query get_peers")
+            node.pong(socket=self.server.socket, trans_id = trans_id, sender_id=self.server.dht.node._id, lock=self.server.send_lock)
             return
         elif query_type == "announce_peer":
             logger.debug("handle query announce_peer")
+            node.pong(socket=self.server.socket, trans_id = trans_id, sender_id=self.server.dht.node._id, lock=self.server.send_lock)
             return
         else:
             logger.error("Unknown query type: %s" % (query_type))
@@ -156,74 +162,100 @@ class DHTServer(SocketServer.ThreadingMixIn, SocketServer.UDPServer):
         self.send_lock = threading.Lock()
 
 class DHT(object):
-    def __init__(self, host, port, boot_host, boot_port):
+    def __init__(self, host, port):
         self.node = Node(unicode(host), port, random_node_id())
         self.rt = RoutingTable()
+        self.rt_peers = RoutingTable()
         self.server = DHTServer((self.node.host, self.node.port), DHTRequestHandler)
         self.server.dht = self
+
+        self.sample_count = 8
+        self.max_bootstrap_errors = 5
+        self.bootstrap_iteration_timeout = 2
+        self.find_iteration_timeout = 2
+        self.gc_iteration_timeout = 1
+        self.gc_max_time = 60
+        self.gc_max_trans = 5
+
+        self.running = False
 
         logger.debug("DHT Server listening on %s:%d" % (host, port))
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.server_thread.daemon = True
-        self.server_thread.start()
 
         self.gc_thread = threading.Thread(target=self.gc)
         self.gc_thread.daemon = True
-        self.gc_thread.start()
 
-        self.bootstrap(unicode(boot_host), boot_port)
-    
-    def iterative_find_nodes(self, find_iteration_timeout, sample_count):
+        self.iterative_thread = threading.Thread(target=self.iterative_find_nodes)
+        self.iterative_thread.daemon = True
 
-        logger.debug("Entering main node finding loop")
-
-        while True:
-            nodes = self.rt.sample(sample_count)
-            for node_id, node in nodes:
-                node.find_node(random_node_id(), socket=self.server.socket, sender_id=self.node._id)
-                #node.get_peers("3253ccc93c6b1a6c5f39c898ecfb2a47f33c3421".decode("hex"), socket=self.server.socket, sender_id=self.node._id)
-
-            logger.info("Current known nodes count: %d" % (self.rt.count()))
-            time.sleep(find_iteration_timeout)
+    def start(self):
+        self.server_thread.start()
+        logger.debug("DHT server thread started")
 
     def bootstrap(self, boot_host, boot_port):
-
-        sample_count = 8
-        max_bootstrap_errors = 5
-        bootstrap_iteration_timeout = 2
-        find_iteration_timeout = 2
 
         logger.debug("Starting DHT bootstrap on %s:%d" % (boot_host, boot_port))
         boot_node = Node(boot_host, boot_port, "boot")
         self.rt.update_node("boot", boot_node)
 
         # Do cycle, while we didnt get enough nodes to start
-        while self.rt.count() <= sample_count:
+        while self.rt.count() <= self.sample_count:
 
-            if len(boot_node.trans) > max_bootstrap_errors:
+            if len(boot_node.trans) > self.max_bootstrap_errors:
                 logger.error("Too many attempts to bootstrap, seems boot node %s:%d is down. Givin up" % (boot_host, boot_port))
-                return
+                return False
 
             boot_node.find_node(self.node._id, socket=self.server.socket, sender_id=self.node._id)
-            time.sleep(bootstrap_iteration_timeout)
+            time.sleep(self.bootstrap_iteration_timeout)
+
+        self.running = True
         
-        self.iterative_find_nodes(find_iteration_timeout, sample_count)
+        self.gc_thread.start()
+        self.iterative_thread.start()
+
+        return True
+
+    def iterative_find_nodes(self):
+
+        logger.debug("Entering iterative node finding loop")
+
+        while self.running:
+            nodes = self.rt.sample(self.sample_count)
+            for node_id, node in nodes:
+                node.find_node(random_node_id(), socket=self.server.socket, sender_id=self.node._id)
+                #node.get_peers("3253ccc93c6b1a6c5f39c898ecfb2a47f33c3421".decode("hex"), socket=self.server.socket, sender_id=self.node._id)
+
+            logger.debug("Current known nodes count: %d" % (self.rt.count()))
+            time.sleep(self.find_iteration_timeout)
 
     def gc(self):
 
         logger.debug("Garbage collector started")
-        while self.rt.count() <= 8:
-            time.sleep(1)
+        while self.rt.count() <= self.sample_count:
+            time.sleep(self.gc_iteration_timeout)
             
-        while True:
-            nodes = self.rt.sample(int(self.rt.count() / 3))
+        logger.debug("Entering garbage collector loop")
+        while self.running:
+            nodes = self.rt.sample(self.sample_count)
             for node_id, node in nodes:
                 time_diff = time.time() - node.access_time
-                if time_diff > 60:
-                    if len(node.trans) > 5:
-                        logger.info("We have node with last access time difference: %d sec and %d pending transactions, remove it: %r" % (time_diff, len(node.trans), node))
+                if time_diff > self.gc_max_time:
+                    if len(node.trans) > self.gc_max_trans:
+                        logger.debug("We have node with last access time difference: %d sec and %d pending transactions, remove it: %r" % (time_diff, len(node.trans), node))
                         self.rt.remove_node(node_id)
                         continue
                     node.ping(socket=self.server.socket, sender_id=self.node._id)
+            time.sleep(self.gc_iteration_timeout)
 
-            time.sleep(1)
+    def stop(self):
+        logger.debug("Stop DHT")
+        self.running = False
+        self.gc_thread.join()
+        logger.debug("GC stopped")
+        self.iterative_thread.join()
+        logger.debug("Stopped iterative loop")
+        self.server.shutdown()
+        self.server_thread.join()
+        logger.debug("Stopped server thread")
+
