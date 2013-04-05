@@ -24,12 +24,13 @@ class Node(object):
     def __repr__(self):
         return repr("%s %s:%d" % (self._id.encode('hex'), self.host, self.port))
 
-    def add_trans(self, name):
+    def add_trans(self, name, info_hash=None):
         """ Generate and add new transaction """
         trans_id = random_trans_id()
         with self.lock:
             self.trans[trans_id] = {
                     "name": name,
+                    "info_hash": info_hash,
                     "access_time": int(time.time())
             }
         return trans_id
@@ -135,7 +136,7 @@ class Node(object):
 
     def get_peers(self, info_hash, socket=None, sender_id=None, lock=None):
         """ Construct query get_peers message """
-        trans_id = self.add_trans("get_peers")
+        trans_id = self.add_trans("get_peers", info_hash)
         message = {
             "y": "q",
             "q": "get_peers",

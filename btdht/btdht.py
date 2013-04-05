@@ -97,15 +97,20 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             logger.debug("ping response for: %r" % (node))
         elif t_name == "get_peers":
             node.update_access()
-            logger.debug("get_peers response for: %r" % (node))
+            info_hash = trans["info_hash"]
+            
+            logger.debug("get_peers response for %r" % (node))
+
             if "values" in args:
+                logger.debug("We got new peers for %s" % (info_hash.encode("hex")))
                 values = args["values"]
                 for addr in values:
-                    logger.info(unpack_hostport(addr))
-                    logger.info(addr.encode("hex"))
+                    hp = unpack_hostport(addr)
+                    self.server.dht.ht.add_peer(info_hash, hp)
+                    logger.debug("Got new peer for %s: %r" % (info_hash.encode("hex"), unpack_hostport(addr)))
             if "nodes" in args:
-                new_nodes = decode_nodes(args["nodes"])
                 logger.debug("We got new nodes from %r" % (node))
+                new_nodes = decode_nodes(args["nodes"])
                 for new_node_id, new_node_host, new_node_port in new_nodes:
                     logger.debug("Adding %r %s:%d as new node" % (new_node_id.encode("hex"), new_node_host, new_node_port))
                     self.server.dht.rt.update_node(new_node_id, Node(new_node_host, new_node_port, new_node_id))
@@ -173,6 +178,7 @@ class DHT(object):
         self.gc_iteration_timeout = 1
         self.gc_max_time = 60
         self.gc_max_trans = 5
+        self.peers_iteration_timeout = 2
         self.randomize_node_id = True
 
         self.running = False
@@ -186,6 +192,9 @@ class DHT(object):
 
         self.iterative_thread = threading.Thread(target=self.iterative_find_nodes)
         self.iterative_thread.daemon = True
+
+        self.peers_thread = threading.Thread(target=self.iterative_get_peers)
+        self.peers_thread.daemon = True
 
     def start(self):
         self.server_thread.start()
@@ -211,11 +220,11 @@ class DHT(object):
         
         self.gc_thread.start()
         self.iterative_thread.start()
+        self.peers_thread.start()
 
         return True
 
     def iterative_find_nodes(self):
-
         logger.debug("Entering iterative node finding loop")
 
         while self.running:
@@ -228,6 +237,16 @@ class DHT(object):
                 node.find_node(nid, socket=self.server.socket, sender_id=self.node._id)
             logger.debug("Current known nodes count: %d" % (self.rt.count()))
             time.sleep(self.find_iteration_timeout)
+
+    def iterative_get_peers(self):
+        logger.debug("Trying to find hash peers iteratively")
+
+        while self.running:
+            nodes = self.rt.sample(self.sample_count)
+            for node_id, node in nodes:
+                for hash_id in self.ht.hashes.keys():
+                    node.get_peers(hash_id, socket=self.server.socket, sender_id=self.node._id)
+            time.sleep(self.peers_iteration_timeout)
 
     def gc(self):
 
@@ -255,14 +274,9 @@ class DHT(object):
         logger.debug("GC stopped")
         self.iterative_thread.join()
         logger.debug("Stopped iterative loop")
+        self.peers_thread.join()
+        logger.debug("Stopped peers iterative loop")
         self.server.shutdown()
         self.server_thread.join()
         logger.debug("Stopped server thread")
-
-    def iterative_get_peers(self, target_hash):
-        logger.info("Trying to find hash peers iteratively")
-        for node_id, node in self.rt.nodes.items():
-            node.get_peers(target_hash.decode("hex"), socket=self.server.socket, sender_id=self.node._id)
-            
-
-
+           
