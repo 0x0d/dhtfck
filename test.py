@@ -15,13 +15,14 @@ dht1.start()
 dht1.bootstrap('router.bittorrent.com', 6881)
 time.sleep(10)
 
-dht1.ht.add_hash("232db31bfa957866dad7d58cd3a8db1357bbf49c".decode("hex"))
+dht1.ht.add_hash("746385fe32b268d513d068f22c53c46d2eb34a5c".decode("hex"))
+#dht1.ht.add_hash("c90db98c5aabe64dcd7f730d816e755242fffbd4".decode("hex"))
+#dht1.ht.add_hash("a961bc2b93a2304880f919e304424a14400ba8a2".decode("hex"))
 
 while True:
 
     print dht1.rt.count()
     print dht1.rt.bad_count()
-    print dht1.ht.count_hash_peers("232db31bfa957866dad7d58cd3a8db1357bbf49c".decode("hex"))
     print dht1.ht.count_all_peers()
     time.sleep(3)
 

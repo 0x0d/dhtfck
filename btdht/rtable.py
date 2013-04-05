@@ -58,6 +58,9 @@ class RoutingTable(object):
                 self.bad_nodes[node_id] = self.nodes[node_id]
                 del self.nodes[node_id]
 
+    def get_nodes(self):
+        return self.nodes
+
     def count(self):
         """ Count nodes in table """
         return len(self.nodes)

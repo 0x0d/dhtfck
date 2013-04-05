@@ -107,7 +107,7 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
                 for addr in values:
                     hp = unpack_hostport(addr)
                     self.server.dht.ht.add_peer(info_hash, hp)
-                    logger.debug("Got new peer for %s: %r" % (info_hash.encode("hex"), unpack_hostport(addr)))
+                    logger.debug("Got new peer for %s: %r" % (info_hash.encode("hex"), hp))
             if "nodes" in args:
                 logger.debug("We got new nodes from %r" % (node))
                 new_nodes = decode_nodes(args["nodes"])
@@ -242,9 +242,10 @@ class DHT(object):
         logger.debug("Trying to find hash peers iteratively")
 
         while self.running:
-            nodes = self.rt.sample(self.sample_count)
-            for node_id, node in nodes:
-                for hash_id in self.ht.hashes.keys():
+            for hash_id in self.ht.hashes.keys():
+                nodes = self.rt.get_close_nodes(hash_id, self.sample_count)
+                #nodes = self.rt.sample(self.sample_count)
+                for node_id, node in nodes:
                     node.get_peers(hash_id, socket=self.server.socket, sender_id=self.node._id)
             time.sleep(self.peers_iteration_timeout)
 
