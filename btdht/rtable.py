@@ -20,6 +20,7 @@ class RoutingTable(object):
     #
     def __init__(self):
         self.nodes = {}
+        self.bad_nodes = {}
         self.lock = threading.Lock()
 
     def get_close_nodes(self, target, num=3):
@@ -44,6 +45,8 @@ class RoutingTable(object):
     def update_node(self, node_id, node):
         """ Add new or update node """
         with self.lock:
+            if node_id in self.bad_nodes:
+                return
             if node_id not in self.nodes:
                 self.nodes[node_id] = node
             self.nodes[node_id].update_access()
@@ -52,11 +55,16 @@ class RoutingTable(object):
         """ Remove node from routing table """
         with self.lock:
             if node_id in self.nodes:
+                self.bad_nodes[node_id] = self.nodes[node_id]
                 del self.nodes[node_id]
 
     def count(self):
         """ Count nodes in table """
         return len(self.nodes)
+
+    def bad_count(self):
+        """ Count bad nodes in table """
+        return len(self.bad_nodes)
 
     def node_by_trans(self, trans_id):
         """ Get apropriate node by transaction_id """

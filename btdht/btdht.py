@@ -7,6 +7,7 @@ import time
 import logging
 
 from .rtable import RoutingTable
+from .htable import HashTable
 from .bencode import bdecode, BTFailure
 from .node import Node
 from .utils import decode_nodes, encode_nodes, random_node_id, unpack_host, unpack_hostport
@@ -99,7 +100,6 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             logger.debug("get_peers response for: %r" % (node))
             if "values" in args:
                 values = args["values"]
-                logger.info("got values")
                 for addr in values:
                     logger.info(unpack_hostport(addr))
                     logger.info(addr.encode("hex"))
@@ -108,7 +108,7 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
                 logger.debug("We got new nodes from %r" % (node))
                 for new_node_id, new_node_host, new_node_port in new_nodes:
                     logger.debug("Adding %r %s:%d as new node" % (new_node_id.encode("hex"), new_node_host, new_node_port))
-                    self.server.dht.rt_peers.update_node(new_node_id, Node(new_node_host, new_node_port, new_node_id))
+                    self.server.dht.rt.update_node(new_node_id, Node(new_node_host, new_node_port, new_node_id))
 
     def handle_query(self, message):
         trans_id = message["t"]
@@ -162,7 +162,7 @@ class DHT(object):
     def __init__(self, host, port):
         self.node = Node(unicode(host), port, random_node_id())
         self.rt = RoutingTable()
-        self.rt_peers = RoutingTable()
+        self.ht = HashTable()
         self.server = DHTServer((self.node.host, self.node.port), DHTRequestHandler)
         self.server.dht = self
 
@@ -173,6 +173,7 @@ class DHT(object):
         self.gc_iteration_timeout = 1
         self.gc_max_time = 60
         self.gc_max_trans = 5
+        self.randomize_node_id = True
 
         self.running = False
 
@@ -218,11 +219,13 @@ class DHT(object):
         logger.debug("Entering iterative node finding loop")
 
         while self.running:
+            if self.randomize_node_id:
+                nid = random_node_id()
+            else:
+                nid = self.node._id
             nodes = self.rt.sample(self.sample_count)
             for node_id, node in nodes:
-                node.find_node(random_node_id(), socket=self.server.socket, sender_id=self.node._id)
-                #node.get_peers("3253ccc93c6b1a6c5f39c898ecfb2a47f33c3421".decode("hex"), socket=self.server.socket, sender_id=self.node._id)
-
+                node.find_node(nid, socket=self.server.socket, sender_id=self.node._id)
             logger.debug("Current known nodes count: %d" % (self.rt.count()))
             time.sleep(self.find_iteration_timeout)
 
@@ -255,4 +258,11 @@ class DHT(object):
         self.server.shutdown()
         self.server_thread.join()
         logger.debug("Stopped server thread")
+
+    def iterative_get_peers(self, target_hash):
+        logger.info("Trying to find hash peers iteratively")
+        for node_id, node in self.rt.nodes.items():
+            node.get_peers(target_hash.decode("hex"), socket=self.server.socket, sender_id=self.node._id)
+            
+
 
