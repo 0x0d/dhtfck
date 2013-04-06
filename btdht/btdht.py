@@ -6,6 +6,7 @@ import threading
 import time
 import logging
 
+from .defines import *
 from .rtable import RoutingTable
 from .htable import HashTable
 from .bencode import bdecode, BTFailure
@@ -54,7 +55,7 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             # Trying to search via transaction id
             node = self.server.dht.rt.node_by_trans(trans_id)
             if not node:
-                logger.error("Cannot find appropriate node for transaction: %r" % (trans_id.encode("hex")))
+                logger.debug("Cannot find appropriate node for transaction: %r" % (trans_id.encode("hex")))
                 return
 
         logger.debug("We found apropriate node %r for %r" % (node, node_id.encode("hex")))
@@ -64,7 +65,7 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             trans = node.trans[trans_id]
             node.delete_trans(trans_id)
         else:
-            logger.error("Cannot find transaction %r in node: %r" % (trans_id.encode("hex"), node))
+            logger.debug("Cannot find transaction %r in node: %r" % (trans_id.encode("hex"), node))
             for trans in node.trans:
                 logger.debug(trans.encode("hex"))
             return
@@ -100,6 +101,13 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             info_hash = trans["info_hash"]
             
             logger.debug("get_peers response for %r" % (node))
+
+            if "token" in args:
+                token = args["token"]
+                logger.debug("Got token: %s" % (token.encode("hex")))
+            else:
+                token = None
+                logger.error("No token in get_peers response from %r" % (node))
 
             if "values" in args:
                 logger.debug("We got new peers for %s" % (info_hash.encode("hex")))
@@ -171,15 +179,17 @@ class DHT(object):
         self.server = DHTServer((self.node.host, self.node.port), DHTRequestHandler)
         self.server.dht = self
 
-        self.sample_count = 8
-        self.max_bootstrap_errors = 5
-        self.bootstrap_iteration_timeout = 2
-        self.find_iteration_timeout = 2
-        self.gc_iteration_timeout = 1
-        self.gc_max_time = 60
-        self.gc_max_trans = 5
-        self.peers_iteration_timeout = 2
-        self.randomize_node_id = True
+        self.sample_count = SAMPLE_COUNT
+        self.max_bootstrap_errors = MAX_BOOTSTRAP_ERRORS
+        self.bootstrap_iteration_timeout = BOOTSTRAP_ITERATION_TIMEOUT
+        self.find_iteration_timeout = FIND_ITERATION_TIMEOUT
+        self.peers_iteration_timeout = PEERS_ITERATION_TIMEOUT
+        self.gc_iteration_timeout = GC_ITERATION_TIMEOUT
+        self.gc_max_time = GC_MAX_TIME
+        self.gc_max_trans = GX_MAX_TRANS
+
+        self.randomize_node_id = RANDOMIZE_NODE_ID
+        self.random_find_peers = RANDOM_FIND_PEERS
 
         self.running = False
 
@@ -230,9 +240,11 @@ class DHT(object):
         while self.running:
             if self.randomize_node_id:
                 nid = random_node_id()
+                nodes = self.rt.sample(self.sample_count)
             else:
                 nid = self.node._id
-            nodes = self.rt.sample(self.sample_count)
+                nodes = self.rt.get_close_nodes(nid, self.sample_count)
+
             for node_id, node in nodes:
                 node.find_node(nid, socket=self.server.socket, sender_id=self.node._id)
             logger.debug("Current known nodes count: %d" % (self.rt.count()))
@@ -243,8 +255,10 @@ class DHT(object):
 
         while self.running:
             for hash_id in self.ht.hashes.keys():
-                nodes = self.rt.get_close_nodes(hash_id, self.sample_count)
-                #nodes = self.rt.sample(self.sample_count)
+                if self.random_find_peers:
+                    nodes = self.rt.sample(self.sample_count)
+                else:
+                    nodes = self.rt.get_close_nodes(hash_id, self.sample_count)
                 for node_id, node in nodes:
                     node.get_peers(hash_id, socket=self.server.socket, sender_id=self.node._id)
             time.sleep(self.peers_iteration_timeout)
@@ -257,7 +271,8 @@ class DHT(object):
             
         logger.debug("Entering garbage collector loop")
         while self.running:
-            nodes = self.rt.sample(self.sample_count)
+            nodes = self.rt.sample(int(self.rt.count() / 2))
+            nodes = self.rt.get_nodes().items()
             for node_id, node in nodes:
                 time_diff = time.time() - node.access_time
                 if time_diff > self.gc_max_time:
