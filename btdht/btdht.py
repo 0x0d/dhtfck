@@ -181,10 +181,7 @@ class DHT(object):
 
         self.sample_count = SAMPLE_COUNT
         self.max_bootstrap_errors = MAX_BOOTSTRAP_ERRORS
-        self.bootstrap_iteration_timeout = BOOTSTRAP_ITERATION_TIMEOUT
-        self.find_iteration_timeout = FIND_ITERATION_TIMEOUT
-        self.peers_iteration_timeout = PEERS_ITERATION_TIMEOUT
-        self.gc_iteration_timeout = GC_ITERATION_TIMEOUT
+        self.iteration_timeout = ITERATION_TIMEOUT
         self.gc_max_time = GC_MAX_TIME
         self.gc_max_trans = GX_MAX_TRANS
 
@@ -197,14 +194,8 @@ class DHT(object):
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.server_thread.daemon = True
 
-        self.gc_thread = threading.Thread(target=self.gc)
-        self.gc_thread.daemon = True
-
-        self.iterative_thread = threading.Thread(target=self.iterative_find_nodes)
+        self.iterative_thread = threading.Thread(target=self.iterative)
         self.iterative_thread.daemon = True
-
-        self.peers_thread = threading.Thread(target=self.iterative_get_peers)
-        self.peers_thread.daemon = True
 
     def start(self):
         self.server_thread.start()
@@ -224,20 +215,20 @@ class DHT(object):
                 return False
 
             boot_node.find_node(self.node._id, socket=self.server.socket, sender_id=self.node._id)
-            time.sleep(self.bootstrap_iteration_timeout)
+            time.sleep(self.iteration_timeout)
 
         self.running = True
         
-        self.gc_thread.start()
         self.iterative_thread.start()
-        self.peers_thread.start()
 
         return True
 
-    def iterative_find_nodes(self):
+    def iterative(self):
         logger.debug("Entering iterative node finding loop")
 
         while self.running:
+
+            # find nodes
             if self.randomize_node_id:
                 nid = random_node_id()
                 nodes = self.rt.sample(self.sample_count)
@@ -247,32 +238,10 @@ class DHT(object):
 
             for node_id, node in nodes:
                 node.find_node(nid, socket=self.server.socket, sender_id=self.node._id)
-            logger.debug("Current known nodes count: %d" % (self.rt.count()))
-            time.sleep(self.find_iteration_timeout)
 
-    def iterative_get_peers(self):
-        logger.debug("Trying to find hash peers iteratively")
-
-        while self.running:
-            for hash_id in self.ht.hashes.keys():
-                if self.random_find_peers:
-                    nodes = self.rt.sample(self.sample_count)
-                else:
-                    nodes = self.rt.get_close_nodes(hash_id, self.sample_count)
-                for node_id, node in nodes:
-                    node.get_peers(hash_id, socket=self.server.socket, sender_id=self.node._id)
-            time.sleep(self.peers_iteration_timeout)
-
-    def gc(self):
-
-        logger.debug("Garbage collector started")
-        while self.rt.count() <= self.sample_count:
-            time.sleep(self.gc_iteration_timeout)
-            
-        logger.debug("Entering garbage collector loop")
-        while self.running:
+            # garbage collector
             nodes = self.rt.sample(int(self.rt.count() / 2))
-            nodes = self.rt.get_nodes().items()
+            #nodes = self.rt.get_nodes().items()
             for node_id, node in nodes:
                 time_diff = time.time() - node.access_time
                 if time_diff > self.gc_max_time:
@@ -281,17 +250,24 @@ class DHT(object):
                         self.rt.remove_node(node_id)
                         continue
                     node.ping(socket=self.server.socket, sender_id=self.node._id)
-            time.sleep(self.gc_iteration_timeout)
+
+            # peer search
+            for hash_id in self.ht.hashes.keys():
+                if self.random_find_peers:
+                    nodes = self.rt.sample(self.sample_count)
+                else:
+                    nodes = self.rt.get_close_nodes(hash_id, self.sample_count)
+                for node_id, node in nodes:
+                    node.get_peers(hash_id, socket=self.server.socket, sender_id=self.node._id)
+
+            time.sleep(self.iteration_timeout)
 
     def stop(self):
-        logger.debug("Stop DHT")
         self.running = False
-        self.gc_thread.join()
-        logger.debug("GC stopped")
+
         self.iterative_thread.join()
         logger.debug("Stopped iterative loop")
-        self.peers_thread.join()
-        logger.debug("Stopped peers iterative loop")
+
         self.server.shutdown()
         self.server_thread.join()
         logger.debug("Stopped server thread")

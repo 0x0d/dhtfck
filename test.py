@@ -6,7 +6,7 @@ from btdht import DHT
 if __name__ == "__main__":
 
     # Enable logging
-    loglevel = logging.INFO
+    loglevel = logging.DEBUG
     formatter = logging.Formatter("[%(levelname)s@%(created)s] %(message)s")
     stdout_handler = logging.StreamHandler()
     stdout_handler.setFormatter(formatter)
