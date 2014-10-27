@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import threading
-import random
 
 class HashTable(object):
 
@@ -12,7 +11,7 @@ class HashTable(object):
     def add_hash(self, hash):
         with self.lock:
             if hash not in self.hashes:
-                self.hashes[hash] = []
+                self.hashes[hash] = set([])
 
     def remove_hash(self, hash):
         with self.lock:
@@ -23,10 +22,15 @@ class HashTable(object):
         with self.lock:
             if hash in self.hashes:
                 if peer not in self.hashes[hash]:
-                    self.hashes[hash].append(peer)
+                    self.hashes[hash].add(peer)
 
-    def remove_peer(self):
-        return
+    def remove_peer(self, hash, peer):
+        with self.lock:
+            if hash in self.hashes:
+                peer_set = self.hashes[hash]
+                if peer in peer_set:
+                    peer_set.remove(peer)
+        return peer_set
 
     def count_hash_peers(self, hash):
         return len(self.hashes[hash])
