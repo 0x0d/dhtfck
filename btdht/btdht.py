@@ -66,8 +66,10 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             node.delete_trans(trans_id)
         else:
             logger.debug("Cannot find transaction %r in node: %r" % (trans_id.encode("hex"), node))
-            for trans in node.trans:
+            trans_buf = dict(node.trans)
+            for trans in trans_buf:
                 logger.debug(trans.encode("hex"))
+            del trans_buf
             return
 
         if "ip" in args:
