@@ -181,6 +181,7 @@ class DHT(object):
         self.server = DHTServer((self.node.host, self.node.port), DHTRequestHandler)
         self.server.dht = self
 
+        self.bootstrap_count = BOOTSTRAP_COUNT
         self.sample_count = SAMPLE_COUNT
         self.max_bootstrap_errors = MAX_BOOTSTRAP_ERRORS
         self.iteration_timeout = ITERATION_TIMEOUT
@@ -210,7 +211,7 @@ class DHT(object):
         self.rt.update_node("boot", boot_node)
 
         # Do cycle, while we didnt get enough nodes to start
-        while self.rt.count() <= self.sample_count:
+        while self.rt.count() <= self.bootstrap_count:
 
             if len(boot_node.trans) > self.max_bootstrap_errors:
                 logger.error("Too many attempts to bootstrap, seems boot node %s:%d is down. Givin up" % (boot_host, boot_port))
