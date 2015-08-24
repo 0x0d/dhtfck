@@ -3,6 +3,8 @@
 import os
 import struct
 import socket
+import hmac
+import hashlib
 
 __node_id_bits__ = 160
 __trans_id_bits__ = 32
@@ -83,3 +85,5 @@ def get_version():
     """ Return appropriate DHT version bytes """
     return "BT\x00\x01"
 
+def create_token(key, info_hash, node_id):
+    return hmac.new(key,info_hash+node_id,hashlib.sha1).digest()
