@@ -36,7 +36,7 @@ class HashTable(object):
         return len(self.hashes[hash])
     
     def get_hash_peers(self, hash):
-        return self.hashes[hash]
+        return self.hashes.get(hash,None)
 
     def count_hashes(self):
         return len(self.hashes)

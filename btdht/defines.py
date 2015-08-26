@@ -1,4 +1,7 @@
 
+# How many DHT nodes for bootstrap
+BOOTSTRAP_COUNT = 1
+
 # How many DHT nodes we query per ITERATION_TIMEOUT
 SAMPLE_COUNT = 8
 
