@@ -310,7 +310,7 @@ class DHT(object):
             # peer announce
             for hash_id in self.announces.hashes.keys():
                 nodes_id = self.peer_tokens.get_hash_peers(hash_id)
-                if len(nodes_id) > 0:
+                if nodes_id and len(nodes_id) > 0:
                     for node_id in nodes_id:
                         node = self.rt.node_by_id(node_id)
                         token = node.get_token(hash_id)
