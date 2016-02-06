@@ -5,13 +5,14 @@ import socket
 import threading
 import time
 import logging
+import os
 
 from .defines import *
 from .rtable import RoutingTable
 from .htable import HashTable
 from .bencode import bdecode, BTFailure
 from .node import Node
-from .utils import decode_nodes, encode_nodes, random_node_id, unpack_host, unpack_hostport
+from .utils import decode_nodes, encode_nodes, random_node_id, unpack_host, unpack_hostport, pack_host, pack_hostport, create_token
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +67,10 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             node.delete_trans(trans_id)
         else:
             logger.debug("Cannot find transaction %r in node: %r" % (trans_id.encode("hex"), node))
-            for trans in node.trans:
+            trans_buf = dict(node.trans)
+            for trans in trans_buf:
                 logger.debug(trans.encode("hex"))
+            del trans_buf
             return
 
         if "ip" in args:
@@ -101,7 +104,7 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             info_hash = trans["info_hash"]
             
             logger.debug("get_peers response for %r" % (node))
-
+                        
             if "token" in args:
                 token = args["token"]
                 logger.debug("Got token: %s" % (token.encode("hex")))
@@ -111,6 +114,11 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
 
             if "values" in args:
                 logger.debug("We got new peers for %s" % (info_hash.encode("hex")))
+                if token:
+                    logger.debug("got token %s from %s" % (token.encode("hex"), node._id.encode("hex")))
+                    self.server.dht.peer_tokens.add_hash(info_hash)
+                    self.server.dht.peer_tokens.add_peer(info_hash,node._id)
+                    node.add_token(info_hash,token)
                 values = args["values"]
                 for addr in values:
                     hp = unpack_hostport(addr)
@@ -122,7 +130,12 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
                 for new_node_id, new_node_host, new_node_port in new_nodes:
                     logger.debug("Adding %r %s:%d as new node" % (new_node_id.encode("hex"), new_node_host, new_node_port))
                     self.server.dht.rt.update_node(new_node_id, Node(new_node_host, new_node_port, new_node_id))
-
+        elif t_name == "announce_peer":            
+            # if announcement successful, clear up entry in hashtable
+            info_hash = trans["info_hash"]
+            self.server.dht.announces.remove_hash(info_hash)
+            logger.debug("Successful announce for %s" % info_hash.encode("hex"))
+            
     def handle_query(self, message):
         trans_id = message["t"]
         query_type = message["q"]
@@ -153,17 +166,46 @@ class DHTRequestHandler(SocketServer.BaseRequestHandler):
             node.found_node(found_nodes, socket=self.server.socket, trans_id = trans_id, sender_id=self.server.dht.node._id, lock=self.server.send_lock)
         elif query_type == "get_peers":
             logger.debug("handle query get_peers")
-            node.pong(socket=self.server.socket, trans_id = trans_id, sender_id=self.server.dht.node._id, lock=self.server.send_lock)
+            #node.pong(socket=self.server.socket, trans_id = trans_id, sender_id=self.server.dht.node._id, lock=self.server.send_lock)
+            info_hash = args["info_hash"]
+            token = create_token(self.server.dht.key,info_hash,node_id)
+            nodes = None
+            values = []
+            peers = self.server.dht.ht.get_hash_peers(info_hash.encode("hex"))
+            if not peers:
+                nodes = encode_nodes(self.server.dht.rt.get_close_nodes(info_hash, 8))
+            else:
+                for p in peers:
+                    values.append(pack_hostport(p[0],p[1]))
+            node.got_peers(token, values, nodes, socket=self.server.socket, trans_id=trans_id, sender_id=self.server.dht.node._id, lock=self.server.send_lock)
+            # store token for later check if announce_peer received
+            node.add_local_token(info_hash, token)
             return
         elif query_type == "announce_peer":
             logger.debug("handle query announce_peer")
-            node.pong(socket=self.server.socket, trans_id = trans_id, sender_id=self.server.dht.node._id, lock=self.server.send_lock)
+
+            ## check on token (need to store them beforehand when responding to get_peers)
+            token = args['token']
+            info_hash = args['info_hash']
+            node_id = args['id']
+            if not token: # let's ignore the call
+                logger.debug('No token received by ' % (node_id.encode('hex')))
+            else:
+                ctoken = node.get_local_token(info_hash)
+                if ctoken and token == ctoken:
+                    node.pong(socket=self.server.socket, trans_id = trans_id, sender_id=self.server.dht.node._id, lock=self.server.send_lock)
+                    self.server.dht.ht.add_peer(info_hash, (node.host, node.port))
+                else:
+                    node.send_protocol_error("Bad token", socket=self.server.socket, trans_id = trans_id, lock=self.server.send_lock)
+
             return
         else:
             logger.error("Unknown query type: %s" % (query_type))
 
     def handle_error(self, message):
-        logger.debug("We got error message from: ")
+        logger.error("We got error message %s:" % (message))
+        #print 't=',message.get('t',None).encode("hex")
+        #print 'v=',message.get('v',None)
         return
 
 class DHTServer(SocketServer.ThreadingMixIn, SocketServer.UDPServer):
@@ -178,7 +220,10 @@ class DHT(object):
         self.ht = HashTable()
         self.server = DHTServer((self.node.host, self.node.port), DHTRequestHandler)
         self.server.dht = self
-
+        self.announces = HashTable()
+        self.peer_tokens = HashTable()
+        
+        self.bootstrap_count = BOOTSTRAP_COUNT
         self.sample_count = SAMPLE_COUNT
         self.max_bootstrap_errors = MAX_BOOTSTRAP_ERRORS
         self.iteration_timeout = ITERATION_TIMEOUT
@@ -188,6 +233,8 @@ class DHT(object):
         self.randomize_node_id = RANDOMIZE_NODE_ID
         self.random_find_peers = RANDOM_FIND_PEERS
 
+        self.key = os.urandom(20) # 20 random bytes = 160 bits
+        
         self.running = False
 
         logger.debug("DHT Server listening on %s:%d" % (host, port))
@@ -208,7 +255,7 @@ class DHT(object):
         self.rt.update_node("boot", boot_node)
 
         # Do cycle, while we didnt get enough nodes to start
-        while self.rt.count() <= self.sample_count:
+        while self.rt.count() <= self.bootstrap_count:
 
             if len(boot_node.trans) > self.max_bootstrap_errors:
                 logger.error("Too many attempts to bootstrap, seems boot node %s:%d is down. Givin up" % (boot_host, boot_port))
@@ -260,6 +307,20 @@ class DHT(object):
                 for node_id, node in nodes:
                     node.get_peers(hash_id, socket=self.server.socket, sender_id=self.node._id)
 
+            # peer announce
+            for hash_id in self.announces.hashes.keys():
+                nodes_id = self.peer_tokens.get_hash_peers(hash_id)
+                if nodes_id and len(nodes_id) > 0:
+                    for node_id in nodes_id:
+                        node = self.rt.node_by_id(node_id)
+                        token = node.get_token(hash_id)
+                        if token:
+                            node.announce_peer(token, hash_id, socket=self.server.socket, sender_id=self.node._id)
+                        else:
+                            logger.error("Unknown token for %s" % hash_id.encode("hex"))
+                else:
+                    logger.error("Cannot find node to announce to for %s" % hash_id.encode("hex"))
+                    
             time.sleep(self.iteration_timeout)
 
     def stop(self):
