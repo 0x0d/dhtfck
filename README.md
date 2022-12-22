@@ -1,3 +1,5 @@
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2F0x0d%2Fdhtfck.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2F0x0d%2Fdhtfck?ref=badge_shield)
+
 WTF is this?
 ----------------
 
@@ -51,3 +53,7 @@ if __name__ == "__main__":
     print("Total peers found: %d" % (len(res)))
     dht.stop()
 ```
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2F0x0d%2Fdhtfck.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2F0x0d%2Fdhtfck?ref=badge_large)
